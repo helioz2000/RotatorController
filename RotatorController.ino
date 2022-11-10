@@ -66,6 +66,9 @@ int analogCount;
 #define ANALOG_MAX_MV 3000  // Voltage at full scale of analog input
 int analogMilliVolts;
 
+long nextSimulation;
+#define SIMULATION_INTERVAL 100
+
 // Time
 long nextTimeUpdate = 0;
 #define TIME_UPDATE_INTERVAL 1000
@@ -99,7 +102,11 @@ int gh=102;
 int gx=110;
 int gy=144;
 int curent=0;
-
+#define POS_DIA 150     // diameter of positioner circle
+int pos_radius = POS_DIA / 2;
+int pos_margin = (TFT_Y_MAX - POS_DIA) /2;
+int pos_y = pos_radius + pos_margin;  // center Y of positioner
+int pos_x = TFT_X_MAX - pos_radius - pos_margin;              // center X of positioner
 
 // Control Task definitions
 TaskHandle_t controlTaskHandle;
@@ -145,7 +152,7 @@ void setup() {
   tft.begin();
   tft.setRotation(TFT_ROTATION);
   tft.pushImage(0, 0, TFT_X_MAX, TFT_Y_MAX, (uint16_t *)img_logo);
-  delay(2000);
+  delay(1000);
   tft.fillScreen(TFT_BLACK);
   sprite.createSprite(320, 170);
   sprite.setTextDatum(3);
@@ -159,6 +166,8 @@ void setup() {
   xTimerStart(controlTimer, CTRL_TMR_START_WAIT);
   controlStart = micros();
   Serial.printf("Started controlTask on CPU core %d with priority %d\n", CTRL_TASK_CPU, CTRL_TASK_PRI );
+
+  nextSimulation = 0;
 
 }
 
@@ -178,17 +187,50 @@ void drawScreen() {
   sprite.setTextColor(TFT_WHITE,PURPLE);
   sprite.drawString("Raw: "+ String(analogCount),10,92,2);
   sprite.drawString("mV: " + String(analogMilliVolts),10,108,2);
-  sprite.drawString("MAX:",10,138,2);
+  sprite.drawString("POS: "+ String(actualBearing),10,138,2);
   //sprite.drawString(String(dw)+", "+String(y),10,58);    
   //sprite.drawString(String(analogRead(18)),gx+160,26);
 
   sprite.setTextColor(TFT_WHITE, GREEN);
-  sprite.drawString("SPEED:",10,68);
+  sprite.drawString("VK3ERW",10,68);
   sprite.setTextColor(TFT_YELLOW,TFT_BLACK);
-  sprite.drawString("ANALOG READINGS",gx+10,16,2);
+  //sprite.drawString("ANALOG READINGS",gx+10,16,2);
   sprite.drawString("ON PIN 12",gx+10,30);
   sprite.setFreeFont();
 
+  // Draw lines
+  uint32_t lineStart = pos_radius;
+  uint32_t lineEnd = pos_radius - 10;
+  float xa = 0.0, ya = 0.0, xb = 0.0, yb = 0.0;
+  for (uint32_t i = 0; i < 360; i = i+30) {
+    getCoord(pos_x, pos_y, &xa, &ya, lineStart, float(i));
+    getCoord(pos_x, pos_y, &xb, &yb, lineEnd, float(i));
+    sprite.drawLine(xa,ya,xb,yb,TFT_YELLOW);
+  }
+
+  // Draw the circle
+  sprite.drawCircle(pos_x, pos_y, pos_radius, TFT_WHITE);
+
+  // pointer pivot
+  sprite.fillSmoothCircle(pos_x, pos_y, 5, TFT_YELLOW);
+
+  getCoord(pos_x, pos_y, &xa, &ya, lineStart, float(actualBearing));
+  // Draw pointer
+  sprite.drawWideLine(pos_x, pos_y, xa, ya, 6.0f, TFT_RED);
+  
+  /*
+  sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+  uint32_t dialOffset = pos_radius - 10;
+  float xp = 0.0, yp = 0.0; // Use float pixel position for smooth AA motion
+  // Draw digits around perimeter
+  for (uint32_t h = 0; h < 360; h = h+30) {
+    //getCoord(pos_x, pos_y, &xp, &yp, dialOffset, h * 360.0 / 12);
+    getCoord(pos_x, pos_y, &xp, &yp, dialOffset, float(h));
+    sprite.drawNumber(h, xp, 2 + yp);
+  }
+*/
+
+/*
   // Vertical Lines
   for(int i=1;i<12;i++) {
     sprite.drawLine(gx+(i*17),gy,gx+(i*17),gy-gh,GREY);
@@ -208,7 +250,7 @@ void drawScreen() {
   // Thick lines
   sprite.drawLine(gx,gy,gx+gw,gy,TFT_WHITE);
   sprite.drawLine(gx,gy,gx,gy-gh,TFT_WHITE);
-  
+*/  
   sprite.pushSprite(0,0);
 }
 
@@ -352,11 +394,20 @@ void loop() {
   }
   vTaskDelay(1);  // hand control to FreeRTOS
   yield(); // let ESP32 background tasks run
+
   if (nextTimeUpdate < millis()) {
     getLocalTime();
     nextTimeUpdate = millis() + TIME_UPDATE_INTERVAL;
     drawScreen();
   }
+
+  if (nextSimulation < millis()) {
+    actualBearing += 1;
+    if (actualBearing > 359) actualBearing = 0;
+    nextSimulation = millis() + SIMULATION_INTERVAL;
+    drawScreen();
+  }
+  
 }
 
 void getLocalTime(){
@@ -373,9 +424,17 @@ void getLocalTime(){
   strftime(m,12, "%B", &timeinfo);
 
   strftime(dw,10, "%A", &timeinfo);
-   
+  strftime(d,3, "%d", &timeinfo);
+}
 
-   
-   strftime(d,3, "%d", &timeinfo);
-
+// =========================================================================
+// Get coordinates of end of a line, pivot at x,y, length r, angle a
+// =========================================================================
+// Coordinates are returned to caller via the xp and yp pointers
+#define DEG2RAD 0.0174532925
+void getCoord(int16_t x, int16_t y, float *xp, float *yp, int16_t r, float a) {
+  float sx1 = cos( (a - 90) * DEG2RAD);
+  float sy1 = sin( (a - 90) * DEG2RAD);
+  *xp =  sx1 * r + x;
+  *yp =  sy1 * r + y;
 }
